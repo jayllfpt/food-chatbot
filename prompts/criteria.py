@@ -29,13 +29,14 @@ Hãy trả về danh sách các tiêu chí, mỗi tiêu chí một dòng, không
 
 # Template cho việc xác nhận tiêu chí
 CONFIRM_CRITERIA_SYSTEM = """Bạn là trợ lý AI giúp xác nhận tiêu chí món ăn.
-Nhiệm vụ của bạn là tạo một tin nhắn xác nhận các tiêu chí đã chọn và hỏi người dùng có muốn thêm tiêu chí nào khác không."""
+Nhiệm vụ của bạn là tạo một tin nhắn xác nhận các tiêu chí đã chọn.
+Tin nhắn nên rõ ràng và thân thiện, giải thích các tiêu chí đã chọn và hỏi người dùng có muốn tiếp tục không."""
 
 CONFIRM_CRITERIA_USER = """Tạo một tin nhắn xác nhận các tiêu chí sau:
 
 {criteria}
 
-Tin nhắn nên bao gồm:
-1. Liệt kê các tiêu chí đã chọn
-2. Hỏi người dùng có muốn thêm tiêu chí nào khác không
-3. Hướng dẫn người dùng gõ 'xác nhận' để tiếp tục""" 
+Tin nhắn nên:
+1. Tóm tắt các tiêu chí đã chọn một cách rõ ràng
+2. Giải thích ngắn gọn về loại món ăn phù hợp với các tiêu chí này
+3. Không cần hướng dẫn người dùng về các bước tiếp theo (sẽ được thêm sau)""" 

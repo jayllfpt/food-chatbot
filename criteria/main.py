@@ -167,13 +167,21 @@ class CriteriaProcessor:
             # Gọi Gemini để định dạng
             response = get_model_response(client, CONFIRM_CRITERIA_SYSTEM, user_message)
             
+            # Thêm hướng dẫn rõ ràng về hai lựa chọn
+            response += "\n\n**Bạn có thể:**\n1. Nhấn nút 'Xác nhận' hoặc gõ 'xác nhận' để tiếp tục\n2. Hoặc nhập thêm tiêu chí nếu bạn muốn"
+            
             return response
             
         except Exception as e:
             logger.error(f"Lỗi khi định dạng tiêu chí: {e}")
             # Fallback: sử dụng phương pháp đơn giản
             criteria_text = ", ".join(criteria)
-            return f"Tiêu chí bạn đã chọn: {criteria_text}\nBạn có muốn thêm tiêu chí nào khác không? Nếu không, hãy gõ 'xác nhận' để tiếp tục."
+            return (
+                f"Tiêu chí bạn đã chọn: {criteria_text}\n\n"
+                "**Bạn có thể:**\n"
+                "1. Nhấn nút 'Xác nhận' hoặc gõ 'xác nhận' để tiếp tục\n"
+                "2. Hoặc nhập thêm tiêu chí nếu bạn muốn"
+            )
     
     @staticmethod
     def is_confirmation_message(message: str) -> bool:

@@ -150,23 +150,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         # Kiểm tra xem người dùng có đang yêu cầu gợi ý món ăn không
         if current_state == ConversationState.IDLE and is_food_suggestion_request(user_message):
-            # Chuyển sang trạng thái thu thập tiêu chí
-            SessionManager.set_state(user_id, ConversationState.COLLECTING_CRITERIA)
+            # Trích xuất tiêu chí từ tin nhắn ban đầu
+            initial_criteria = CriteriaProcessor.extract_criteria_from_message(user_message)
             
-            criteria_prompt = (
-                "Bạn muốn ăn món gì? Bạn có thể nhập tiêu chí như 'khô', 'nước', 'chiên', 'nướng', 'xào' "
-                "hoặc bất kỳ tiêu chí nào khác. Bạn có thể nhập nhiều tiêu chí cùng lúc."
-            )
-            
-            # Lưu tin nhắn vào lịch sử
-            SessionManager.add_bot_message(user_id, criteria_prompt)
-            
-            # Tạo nút hủy
-            cancel_button = KeyboardButton("Hủy")
-            reply_markup = ReplyKeyboardMarkup([[cancel_button]], resize_keyboard=True)
-            
-            await update.message.reply_text(criteria_prompt, reply_markup=reply_markup)
-            return
+            # Nếu đã có tiêu chí trong tin nhắn ban đầu, chuyển thẳng sang trạng thái xác nhận
+            if initial_criteria:
+                # Chuyển sang trạng thái xác nhận tiêu chí
+                SessionManager.set_state(user_id, ConversationState.CONFIRMING_CRITERIA, initial_criteria)
+                
+                # Lấy lịch sử hội thoại
+                conversation_history = SessionManager.get_formatted_history(user_id)
+                
+                # Gợi ý thêm tiêu chí nếu cần
+                if len(initial_criteria) < 3:
+                    suggested_criteria = CriteriaProcessor.generate_criteria_suggestions(
+                        initial_criteria, 
+                        conversation_history,
+                        max_suggestions=2
+                    )
+                    
+                    # Thêm tiêu chí được gợi ý vào danh sách
+                    for criterion in suggested_criteria:
+                        if criterion not in initial_criteria:
+                            initial_criteria.append(criterion)
+                    
+                    # Cập nhật trạng thái với tiêu chí mới
+                    SessionManager.set_state(user_id, ConversationState.CONFIRMING_CRITERIA, initial_criteria)
+                
+                # Định dạng tiêu chí để xác nhận
+                confirmation_message = CriteriaProcessor.format_criteria_for_confirmation(initial_criteria)
+                
+                # Lưu tin nhắn vào lịch sử
+                SessionManager.add_bot_message(user_id, confirmation_message)
+                
+                # Tạo nút xác nhận và hủy
+                confirm_button = KeyboardButton("Xác nhận")
+                cancel_button = KeyboardButton("Hủy")
+                reply_markup = ReplyKeyboardMarkup([[confirm_button, cancel_button]], resize_keyboard=True)
+                
+                await update.message.reply_text(confirmation_message, reply_markup=reply_markup)
+                return
+            else:
+                # Không tìm thấy tiêu chí trong tin nhắn ban đầu, chuyển sang trạng thái thu thập tiêu chí
+                SessionManager.set_state(user_id, ConversationState.COLLECTING_CRITERIA)
+                
+                criteria_prompt = (
+                    "Bạn muốn ăn món gì? Bạn có thể nhập tiêu chí như 'khô', 'nước', 'chiên', 'nướng', 'xào' "
+                    "hoặc bất kỳ tiêu chí nào khác. Bạn có thể nhập nhiều tiêu chí cùng lúc."
+                )
+                
+                # Lưu tin nhắn vào lịch sử
+                SessionManager.add_bot_message(user_id, criteria_prompt)
+                
+                # Tạo nút hủy
+                cancel_button = KeyboardButton("Hủy")
+                reply_markup = ReplyKeyboardMarkup([[cancel_button]], resize_keyboard=True)
+                
+                await update.message.reply_text(criteria_prompt, reply_markup=reply_markup)
+                return
         
         # Kiểm tra nếu người dùng muốn hủy quá trình
         if user_message.lower() == "hủy" and current_state != ConversationState.IDLE:
