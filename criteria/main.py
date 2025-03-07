@@ -1,6 +1,14 @@
 import logging
 from typing import List, Dict, Any, Optional
 from llm.main import get_model_response, client
+from prompts.criteria import (
+    SUGGEST_CRITERIA_SYSTEM,
+    SUGGEST_CRITERIA_USER,
+    EXTRACT_CRITERIA_SYSTEM,
+    EXTRACT_CRITERIA_USER,
+    CONFIRM_CRITERIA_SYSTEM,
+    CONFIRM_CRITERIA_USER
+)
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -27,6 +35,35 @@ class CriteriaProcessor:
         Returns:
             Danh sách các tiêu chí
         """
+        try:
+            # Sử dụng Gemini để trích xuất tiêu chí
+            user_message = EXTRACT_CRITERIA_USER.format(message=message)
+            response = get_model_response(client, EXTRACT_CRITERIA_SYSTEM, user_message)
+            
+            # Xử lý kết quả
+            extracted_criteria = [line.strip() for line in response.strip().split('\n') if line.strip()]
+            
+            # Nếu không tìm thấy tiêu chí nào, sử dụng phương pháp đơn giản
+            if not extracted_criteria:
+                return CriteriaProcessor._extract_criteria_simple(message)
+            
+            return extracted_criteria
+        except Exception as e:
+            logger.error(f"Lỗi khi trích xuất tiêu chí: {e}")
+            # Fallback: sử dụng phương pháp đơn giản
+            return CriteriaProcessor._extract_criteria_simple(message)
+    
+    @staticmethod
+    def _extract_criteria_simple(message: str) -> List[str]:
+        """
+        Phương pháp đơn giản để trích xuất tiêu chí từ tin nhắn
+        
+        Args:
+            message: Tin nhắn của người dùng
+            
+        Returns:
+            Danh sách các tiêu chí
+        """
         # Chuyển đổi tin nhắn thành chữ thường để dễ so sánh
         message_lower = message.lower()
         
@@ -35,6 +72,10 @@ class CriteriaProcessor:
         for criterion in COMMON_CRITERIA:
             if criterion.lower() in message_lower:
                 found_criteria.append(criterion)
+        
+        # Nếu không tìm thấy tiêu chí nào, thêm toàn bộ tin nhắn làm một tiêu chí
+        if not found_criteria and message.strip():
+            found_criteria = [message.strip()]
         
         return found_criteria
     
@@ -74,17 +115,24 @@ class CriteriaProcessor:
             Danh sách các tiêu chí được gợi ý thêm
         """
         try:
-            # Xây dựng prompt cho Gemini
-            system_message = """Bạn là trợ lý AI giúp gợi ý tiêu chí cho món ăn.
-Dựa vào các tiêu chí hiện có và lịch sử hội thoại, hãy gợi ý thêm tiêu chí phù hợp.
-Chỉ trả về danh sách các tiêu chí, mỗi tiêu chí một dòng, không có giải thích hay định dạng khác."""
+            # Chuyển đổi lịch sử hội thoại thành văn bản
+            conversation_text = ""
+            for message in conversation_history:
+                role = "User" if message["role"] == "user" else "Bot"
+                conversation_text += f"{role}: {message['content']}\n\n"
             
-            user_message = f"""Dựa vào lịch sử hội thoại và các tiêu chí hiện có: {', '.join(current_criteria)},
-hãy gợi ý thêm {max_suggestions} tiêu chí phù hợp để tìm kiếm món ăn.
-Chỉ trả về danh sách các tiêu chí, mỗi tiêu chí một dòng, không có giải thích hay định dạng khác."""
+            # Chuẩn bị thông tin tiêu chí hiện có
+            current_criteria_text = ', '.join(current_criteria) if current_criteria else 'Chưa có tiêu chí nào'
             
-            # Gọi Gemini để lấy gợi ý
-            response = get_model_response(client, system_message, user_message)
+            # Sử dụng template để tạo prompt
+            user_message = SUGGEST_CRITERIA_USER.format(
+                conversation_text=conversation_text,
+                current_criteria=current_criteria_text,
+                max_suggestions=max_suggestions
+            )
+            
+            # Gọi Gemini để gợi ý
+            response = get_model_response(client, SUGGEST_CRITERIA_SYSTEM, user_message)
             
             # Xử lý kết quả
             suggested_criteria = [line.strip() for line in response.strip().split('\n') if line.strip()]
@@ -108,11 +156,24 @@ Chỉ trả về danh sách các tiêu chí, mỗi tiêu chí một dòng, khôn
         Returns:
             Chuỗi văn bản đã định dạng
         """
-        if not criteria:
-            return "Bạn chưa cung cấp tiêu chí nào. Vui lòng nhập tiêu chí để tôi có thể gợi ý món ăn phù hợp."
-        
-        criteria_text = ", ".join(criteria)
-        return f"Tiêu chí bạn đã chọn: {criteria_text}\nBạn có muốn thêm tiêu chí nào khác không? Nếu không, hãy gõ 'xác nhận' để tiếp tục."
+        try:
+            # Nếu không có tiêu chí nào
+            if not criteria:
+                return "Bạn chưa cung cấp tiêu chí nào. Vui lòng nhập tiêu chí để tôi có thể gợi ý món ăn phù hợp."
+            
+            # Sử dụng template để tạo prompt
+            user_message = CONFIRM_CRITERIA_USER.format(criteria=', '.join(criteria))
+            
+            # Gọi Gemini để định dạng
+            response = get_model_response(client, CONFIRM_CRITERIA_SYSTEM, user_message)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi định dạng tiêu chí: {e}")
+            # Fallback: sử dụng phương pháp đơn giản
+            criteria_text = ", ".join(criteria)
+            return f"Tiêu chí bạn đã chọn: {criteria_text}\nBạn có muốn thêm tiêu chí nào khác không? Nếu không, hãy gõ 'xác nhận' để tiếp tục."
     
     @staticmethod
     def is_confirmation_message(message: str) -> bool:

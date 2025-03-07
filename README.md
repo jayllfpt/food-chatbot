@@ -46,17 +46,30 @@ The bot will automatically load environment variables from `.env.dev` if it exis
 - Suggests restaurants based on criteria and location
 - Integrates with OpenStreetMap API to find nearby restaurants
 - Provides fallback suggestions when no restaurants are found
+- Uses AI to rank restaurants based on criteria relevance
+- Maintains conversation context for more natural interactions
+- Automatically suggests additional criteria based on user preferences
+- Uses standardized prompt templates for consistent AI responses
+- **NEW:** Improved user experience with custom keyboards
+- **NEW:** Typing indicators for better feedback
+- **NEW:** Intelligent error handling with context-specific messages
+- **NEW:** Ability to cancel operations at any point
+- **NEW:** Centralized fallback handling for consistent error recovery
 
 ## Conversation Flow
 
 1. User asks about food suggestions in natural language
 2. Bot uses Gemini to detect food-related intent
 3. Bot asks for food criteria (e.g., "nướng", "cay", "hải sản")
-4. User provides criteria and confirms with "xác nhận" (confirm)
-5. Bot asks for user's location
-6. User shares location
-7. Bot searches for restaurants near the user's location based on criteria
-8. Bot returns top 3 restaurants or suggests dishes if no restaurants are found
+4. Bot suggests additional criteria based on user's initial input
+5. User provides criteria and confirms with "xác nhận" (confirm)
+6. Bot asks for user's location
+7. User shares location
+8. Bot shows "typing" indicator while processing
+9. Bot searches for restaurants near the user's location based on criteria
+10. Bot ranks restaurants by relevance to the criteria
+11. Bot returns top 3 restaurants or suggests dishes if no restaurants are found
+12. Bot provides quick action buttons for next steps
 
 ## Project Structure
 
@@ -67,6 +80,10 @@ The bot will automatically load environment variables from `.env.dev` if it exis
 - `session/main.py`: User session and state management
 - `location/main.py`: OpenStreetMap API integration for finding restaurants
 - `criteria/main.py`: Food criteria processing and suggestion
+- `prompts/`: Templates for LLM prompts
+  - `criteria.py`: Templates for criteria-related prompts
+  - `recommendation.py`: Templates for food recommendation prompts
+- **NEW:** `fallback/main.py`: Centralized error and fallback handling
 - `.env`: Template for environment variables (safe to commit)
 - `.env.dev`: Actual environment variables with API keys (not committed)
 - `requirements.txt`: Required Python packages

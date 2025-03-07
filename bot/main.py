@@ -1,11 +1,20 @@
 import os
 import logging
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+import asyncio
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from llm.main import get_model_response, client
+from llm.main import (
+    get_model_response, 
+    get_model_response_with_history,
+    analyze_conversation_history,
+    rank_restaurants_by_criteria,
+    generate_food_suggestions,
+    client
+)
 from session.main import SessionManager, ConversationState
 from criteria.main import CriteriaProcessor
 from location.main import LocationService
+from fallback.main import FallbackHandler
 
 # Get environment variables (already loaded in main.py)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -37,7 +46,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Bạn có thể hỏi tôi về việc gợi ý món ăn hoặc tìm quán ăn phù hợp với sở thích của bạn."
     )
     
-    await update.message.reply_text(welcome_message)
+    # Tạo nút gợi ý món ăn
+    suggestion_button = KeyboardButton("Gợi ý món ăn")
+    reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+    
+    await update.message.reply_text(welcome_message, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xử lý lệnh /help."""
@@ -70,7 +83,11 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Lưu tin nhắn vào lịch sử
     SessionManager.add_bot_message(user_id, reset_message)
     
-    await update.message.reply_text(reset_message)
+    # Tạo nút gợi ý món ăn
+    suggestion_button = KeyboardButton("Gợi ý món ăn")
+    reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+    
+    await update.message.reply_text(reset_message, reply_markup=reply_markup)
 
 def is_food_suggestion_request(message: str) -> bool:
     """
@@ -103,6 +120,18 @@ Trả về "no" cho tất cả các trường hợp khác."""
         food_keywords = ["gợi ý món ăn", "tìm món ăn", "món ăn", "ăn gì", "đề xuất món", "quán ăn", "nhà hàng"]
         return any(keyword in message.lower() for keyword in food_keywords)
 
+async def send_typing_action(update: Update) -> None:
+    """
+    Hiển thị trạng thái 'đang nhập' để cải thiện trải nghiệm người dùng
+    
+    Args:
+        update: Update từ Telegram
+    """
+    try:
+        await update.effective_chat.send_chat_action(action="typing")
+    except Exception as e:
+        logger.error(f"Lỗi khi gửi trạng thái đang nhập: {e}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xử lý tin nhắn của người dùng dựa trên trạng thái hội thoại."""
     user = update.effective_user
@@ -116,6 +145,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     current_state = SessionManager.get_state(user_id)
     
     try:
+        # Hiển thị trạng thái 'đang nhập'
+        await send_typing_action(update)
+        
         # Kiểm tra xem người dùng có đang yêu cầu gợi ý món ăn không
         if current_state == ConversationState.IDLE and is_food_suggestion_request(user_message):
             # Chuyển sang trạng thái thu thập tiêu chí
@@ -129,18 +161,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Lưu tin nhắn vào lịch sử
             SessionManager.add_bot_message(user_id, criteria_prompt)
             
-            await update.message.reply_text(criteria_prompt)
+            # Tạo nút hủy
+            cancel_button = KeyboardButton("Hủy")
+            reply_markup = ReplyKeyboardMarkup([[cancel_button]], resize_keyboard=True)
+            
+            await update.message.reply_text(criteria_prompt, reply_markup=reply_markup)
+            return
+        
+        # Kiểm tra nếu người dùng muốn hủy quá trình
+        if user_message.lower() == "hủy" and current_state != ConversationState.IDLE:
+            # Đặt lại trạng thái về IDLE
+            SessionManager.reset_state(user_id)
+            
+            cancel_message = "Đã hủy quá trình tìm kiếm. Bạn có thể hỏi tôi về việc gợi ý món ăn bất cứ lúc nào."
+            
+            # Lưu tin nhắn vào lịch sử
+            SessionManager.add_bot_message(user_id, cancel_message)
+            
+            # Tạo nút gợi ý món ăn
+            suggestion_button = KeyboardButton("Gợi ý món ăn")
+            reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+            
+            await update.message.reply_text(cancel_message, reply_markup=reply_markup)
             return
         
         # Xử lý trạng thái thu thập tiêu chí
         elif current_state == ConversationState.COLLECTING_CRITERIA:
             # Trích xuất tiêu chí từ tin nhắn
             extracted_criteria = CriteriaProcessor.extract_criteria_from_message(user_message)
-            
-            # Nếu không tìm thấy tiêu chí nào trong tin nhắn, thử phân tích bằng Gemini
-            if not extracted_criteria:
-                # Thêm tiêu chí tùy chỉnh (coi toàn bộ tin nhắn là một tiêu chí)
-                extracted_criteria = [user_message.strip()]
             
             # Lấy tiêu chí hiện có (nếu có)
             current_criteria = SessionManager.get_criteria(user_id) or []
@@ -151,13 +199,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Cập nhật trạng thái với tiêu chí mới
             SessionManager.set_state(user_id, ConversationState.CONFIRMING_CRITERIA, updated_criteria)
             
+            # Lấy lịch sử hội thoại
+            conversation_history = SessionManager.get_formatted_history(user_id)
+            
+            # Gợi ý thêm tiêu chí nếu cần
+            if len(updated_criteria) < 3:
+                suggested_criteria = CriteriaProcessor.generate_criteria_suggestions(
+                    updated_criteria, 
+                    conversation_history,
+                    max_suggestions=2
+                )
+                
+                # Thêm tiêu chí được gợi ý vào danh sách
+                for criterion in suggested_criteria:
+                    if criterion not in updated_criteria:
+                        updated_criteria.append(criterion)
+                
+                # Cập nhật trạng thái với tiêu chí mới
+                SessionManager.set_state(user_id, ConversationState.CONFIRMING_CRITERIA, updated_criteria)
+            
             # Định dạng tiêu chí để xác nhận
             confirmation_message = CriteriaProcessor.format_criteria_for_confirmation(updated_criteria)
             
             # Lưu tin nhắn vào lịch sử
             SessionManager.add_bot_message(user_id, confirmation_message)
             
-            await update.message.reply_text(confirmation_message)
+            # Tạo nút xác nhận và hủy
+            confirm_button = KeyboardButton("Xác nhận")
+            cancel_button = KeyboardButton("Hủy")
+            reply_markup = ReplyKeyboardMarkup([[confirm_button, cancel_button]], resize_keyboard=True)
+            
+            await update.message.reply_text(confirmation_message, reply_markup=reply_markup)
             return
         
         # Xử lý trạng thái xác nhận tiêu chí
@@ -174,15 +246,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     # Lưu tin nhắn vào lịch sử
                     SessionManager.add_bot_message(user_id, no_criteria_message)
                     
-                    await update.message.reply_text(no_criteria_message)
+                    # Tạo nút hủy
+                    cancel_button = KeyboardButton("Hủy")
+                    reply_markup = ReplyKeyboardMarkup([[cancel_button]], resize_keyboard=True)
+                    
+                    await update.message.reply_text(no_criteria_message, reply_markup=reply_markup)
                     return
                 
                 # Chuyển sang trạng thái chờ vị trí
                 SessionManager.set_state(user_id, ConversationState.WAITING_FOR_LOCATION, current_criteria)
                 
-                # Tạo nút chia sẻ vị trí
+                # Tạo nút chia sẻ vị trí và hủy
                 location_button = KeyboardButton("Chia sẻ vị trí", request_location=True)
-                reply_markup = ReplyKeyboardMarkup([[location_button]], one_time_keyboard=True)
+                cancel_button = KeyboardButton("Hủy")
+                reply_markup = ReplyKeyboardMarkup([[location_button], [cancel_button]], resize_keyboard=True)
                 
                 location_request_message = "Tuyệt vời! Bây giờ, vui lòng chia sẻ vị trí của bạn để tôi có thể tìm các quán ăn gần đó."
                 
@@ -196,11 +273,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 # Trích xuất tiêu chí từ tin nhắn
                 extracted_criteria = CriteriaProcessor.extract_criteria_from_message(user_message)
                 
-                # Nếu không tìm thấy tiêu chí nào trong tin nhắn, thử phân tích bằng Gemini
-                if not extracted_criteria:
-                    # Thêm tiêu chí tùy chỉnh (coi toàn bộ tin nhắn là một tiêu chí)
-                    extracted_criteria = [user_message.strip()]
-                
                 # Thêm tiêu chí mới vào danh sách
                 updated_criteria = current_criteria + [c for c in extracted_criteria if c not in current_criteria]
                 
@@ -213,28 +285,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 # Lưu tin nhắn vào lịch sử
                 SessionManager.add_bot_message(user_id, confirmation_message)
                 
-                await update.message.reply_text(confirmation_message)
+                # Tạo nút xác nhận và hủy
+                confirm_button = KeyboardButton("Xác nhận")
+                cancel_button = KeyboardButton("Hủy")
+                reply_markup = ReplyKeyboardMarkup([[confirm_button, cancel_button]], resize_keyboard=True)
+                
+                await update.message.reply_text(confirmation_message, reply_markup=reply_markup)
                 return
+        
+        # Xử lý trạng thái chờ vị trí (nếu người dùng nhập địa chỉ thay vì chia sẻ vị trí)
+        elif current_state == ConversationState.WAITING_FOR_LOCATION:
+            # Thông báo yêu cầu chia sẻ vị trí
+            location_reminder = "Vui lòng chia sẻ vị trí của bạn bằng cách sử dụng nút 'Chia sẻ vị trí' bên dưới."
+            
+            # Lưu tin nhắn vào lịch sử
+            SessionManager.add_bot_message(user_id, location_reminder)
+            
+            # Tạo nút chia sẻ vị trí và hủy
+            location_button = KeyboardButton("Chia sẻ vị trí", request_location=True)
+            cancel_button = KeyboardButton("Hủy")
+            reply_markup = ReplyKeyboardMarkup([[location_button], [cancel_button]], resize_keyboard=True)
+            
+            await update.message.reply_text(location_reminder, reply_markup=reply_markup)
+            return
         
         # Xử lý trạng thái mặc định (IDLE)
         else:
-            # Gọi Gemini để trả lời tin nhắn thông thường
-            response = get_model_response(client, SYSTEM_MESSAGE, user_message)
+            # Lấy lịch sử hội thoại
+            conversation_history = SessionManager.get_formatted_history(user_id)
+            
+            # Gọi Gemini để trả lời tin nhắn thông thường với lịch sử hội thoại
+            response = get_model_response_with_history(client, SYSTEM_MESSAGE, conversation_history, user_message)
             
             # Lưu tin nhắn vào lịch sử
             SessionManager.add_bot_message(user_id, response)
             
-            await update.message.reply_text(response)
+            # Tạo nút gợi ý món ăn
+            suggestion_button = KeyboardButton("Gợi ý món ăn")
+            reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+            
+            await update.message.reply_text(response, reply_markup=reply_markup)
             return
             
     except Exception as e:
         logger.error(f"Lỗi khi xử lý tin nhắn: {e}")
-        error_message = "Xin lỗi, đã xảy ra lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau."
+        
+        # Sử dụng FallbackHandler để định dạng thông báo lỗi
+        error_message = FallbackHandler.format_error_message(e)
         
         # Lưu tin nhắn vào lịch sử
         SessionManager.add_bot_message(user_id, error_message)
         
-        await update.message.reply_text(error_message)
+        # Đặt lại trạng thái về IDLE
+        SessionManager.reset_state(user_id)
+        
+        # Tạo nút gợi ý món ăn
+        suggestion_button = KeyboardButton("Gợi ý món ăn")
+        reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+        
+        await update.message.reply_text(error_message, reply_markup=reply_markup)
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xử lý vị trí được chia sẻ từ người dùng."""
@@ -246,6 +355,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     current_state = SessionManager.get_state(user_id)
     
     try:
+        # Hiển thị trạng thái 'đang nhập'
+        await send_typing_action(update)
+        
         # Kiểm tra xem người dùng có đang ở trạng thái chờ vị trí không
         if current_state == ConversationState.WAITING_FOR_LOCATION:
             # Lấy tiêu chí hiện có
@@ -260,7 +372,8 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             # Lưu tin nhắn vào lịch sử
             SessionManager.add_bot_message(user_id, processing_message)
             
-            await update.message.reply_text(processing_message)
+            # Gửi thông báo đang xử lý
+            processing_msg = await update.message.reply_text(processing_message, reply_markup=ReplyKeyboardRemove())
             
             # Tìm kiếm quán ăn gần vị trí
             restaurants = LocationService.search_restaurants_by_coordinates(location.latitude, location.longitude)
@@ -268,9 +381,15 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             # Chuyển sang trạng thái gợi ý
             SessionManager.set_state(user_id, ConversationState.SUGGESTING, current_criteria, (location.latitude, location.longitude))
             
+            # Xóa thông báo đang xử lý
+            await processing_msg.delete()
+            
             if restaurants:
+                # Xếp hạng quán ăn dựa trên tiêu chí
+                ranked_restaurants = rank_restaurants_by_criteria(restaurants, current_criteria)
+                
                 # Lấy top 3 quán ăn
-                top_restaurants = LocationService.get_top_restaurants(restaurants)
+                top_restaurants = LocationService.get_top_restaurants(ranked_restaurants, limit=3)
                 
                 # Định dạng kết quả
                 result_message = f"Dựa trên tiêu chí của bạn ({', '.join(current_criteria)}), đây là top 3 quán ăn gần bạn:\n\n"
@@ -283,30 +402,23 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Lưu tin nhắn vào lịch sử
                 SessionManager.add_bot_message(user_id, result_message)
                 
-                await update.message.reply_text(result_message)
+                # Tạo nút gợi ý món ăn
+                suggestion_button = KeyboardButton("Gợi ý món ăn")
+                reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+                
+                await update.message.reply_text(result_message, reply_markup=reply_markup)
             else:
                 # Không tìm thấy quán ăn, sử dụng fallback
-                fallback_message = (
-                    f"Tôi không thể tìm thấy quán ăn nào gần vị trí của bạn dựa trên tiêu chí ({', '.join(current_criteria)}).\n\n"
-                    "Tuy nhiên, tôi có thể gợi ý một số món ăn phù hợp với tiêu chí của bạn:\n\n"
-                )
-                
-                # Gọi Gemini để gợi ý món ăn dựa trên tiêu chí
-                system_message = """Bạn là trợ lý AI giúp gợi ý món ăn.
-Hãy gợi ý 3 món ăn phù hợp với tiêu chí của người dùng.
-Đối với mỗi món, hãy cung cấp tên món và mô tả ngắn gọn."""
-                
-                user_message = f"Gợi ý 3 món ăn phù hợp với các tiêu chí sau: {', '.join(current_criteria)}"
-                
-                food_suggestions = get_model_response(client, system_message, user_message)
-                
-                fallback_message += food_suggestions
-                fallback_message += "\n\nBạn có thể hỏi tôi về việc gợi ý món ăn bất cứ lúc nào."
+                fallback_message = FallbackHandler.handle_no_restaurants(current_criteria)
                 
                 # Lưu tin nhắn vào lịch sử
                 SessionManager.add_bot_message(user_id, fallback_message)
                 
-                await update.message.reply_text(fallback_message)
+                # Tạo nút gợi ý món ăn
+                suggestion_button = KeyboardButton("Gợi ý món ăn")
+                reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+                
+                await update.message.reply_text(fallback_message, reply_markup=reply_markup)
             
             # Đặt lại trạng thái về IDLE
             SessionManager.reset_state(user_id)
@@ -318,17 +430,30 @@ Hãy gợi ý 3 món ăn phù hợp với tiêu chí của người dùng.
             # Lưu tin nhắn vào lịch sử
             SessionManager.add_bot_message(user_id, location_message)
             
-            await update.message.reply_text(location_message)
+            # Tạo nút gợi ý món ăn
+            suggestion_button = KeyboardButton("Gợi ý món ăn")
+            reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+            
+            await update.message.reply_text(location_message, reply_markup=reply_markup)
             return
             
     except Exception as e:
         logger.error(f"Lỗi khi xử lý vị trí: {e}")
-        error_message = "Xin lỗi, đã xảy ra lỗi khi xử lý vị trí của bạn. Vui lòng thử lại sau."
+        
+        # Sử dụng FallbackHandler để định dạng thông báo lỗi
+        error_message = FallbackHandler.format_error_message(e)
         
         # Lưu tin nhắn vào lịch sử
         SessionManager.add_bot_message(user_id, error_message)
         
-        await update.message.reply_text(error_message)
+        # Đặt lại trạng thái về IDLE
+        SessionManager.reset_state(user_id)
+        
+        # Tạo nút gợi ý món ăn
+        suggestion_button = KeyboardButton("Gợi ý món ăn")
+        reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
+        
+        await update.message.reply_text(error_message, reply_markup=reply_markup)
 
 def run_bot() -> None:
     """Khởi động bot."""
