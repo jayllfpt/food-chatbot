@@ -201,6 +201,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         # Kiểm tra xem người dùng có đang yêu cầu gợi ý món ăn không
         if current_state == ConversationState.IDLE and is_food_suggestion_request(user_message):
+            # Đặt lại trạng thái và tạo phiên mới để bắt đầu flow gợi ý món ăn
+            SessionManager.reset_state(user_id)
+            session_id = SessionManager.get_or_create_session(user_id)
+            
             # Trích xuất tiêu chí từ tin nhắn ban đầu
             initial_criteria = CriteriaProcessor.extract_criteria_from_message(user_message)
             
@@ -238,13 +242,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update.message.reply_text(confirmation_message, reply_markup=reply_markup)
                 return
             else:
-                # Không tìm thấy tiêu chí trong tin nhắn ban đầu, chuyển sang trạng thái thu thập tiêu chí
+                # Nếu không có tiêu chí, chuyển sang trạng thái thu thập tiêu chí
                 SessionManager.set_state(user_id, ConversationState.COLLECTING_CRITERIA)
                 
-                criteria_prompt = (
-                    "Bạn muốn ăn món gì? Bạn có thể nhập tiêu chí như 'khô', 'nước', 'chiên', 'nướng', 'xào' "
-                    "hoặc bất kỳ tiêu chí nào khác. Bạn có thể nhập nhiều tiêu chí cùng lúc."
-                )
+                # Tạo thông báo yêu cầu tiêu chí
+                criteria_prompt = "Hãy cho tôi biết bạn muốn ăn gì? Bạn có thể nhập các tiêu chí như: nướng, cay, hải sản..."
                 
                 # Lưu tin nhắn vào lịch sử
                 SessionManager.add_bot_message(user_id, criteria_prompt)
@@ -273,8 +275,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(cancel_message, reply_markup=reply_markup)
             return
         
-        # Xử lý trạng thái thu thập tiêu chí
-        elif current_state == ConversationState.COLLECTING_CRITERIA:
+        # Xử lý các trạng thái khác nhau của hội thoại
+        if current_state == ConversationState.COLLECTING_CRITERIA:
             # Trích xuất tiêu chí từ tin nhắn
             extracted_criteria = CriteriaProcessor.extract_criteria_from_message(user_message)
             
@@ -315,8 +317,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             await update.message.reply_text(confirmation_message, reply_markup=reply_markup)
             return
-        
-        # Xử lý trạng thái xác nhận tiêu chí
         elif current_state == ConversationState.CONFIRMING_CRITERIA:
             # Lấy tiêu chí hiện có
             current_criteria = SessionManager.get_criteria(user_id) or []
@@ -405,8 +405,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 await update.message.reply_text(confirmation_message, reply_markup=reply_markup)
                 return
-        
-        # Xử lý trạng thái chờ vị trí
         elif current_state == ConversationState.WAITING_FOR_LOCATION:
             # Kiểm tra xem tin nhắn có chứa vị trí không
             if update.message.location:
@@ -489,13 +487,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 await update.message.reply_text(location_reminder, reply_markup=reply_markup)
                 return
-        
-        # Xử lý trạng thái mặc định (IDLE)
         else:
+            # Nếu không ở trong flow gợi ý món ăn, sử dụng Gemini để trả lời tin nhắn thông thường
+            # Hiển thị trạng thái "đang nhập" để cải thiện trải nghiệm người dùng
+            await send_typing_action(update)
+            
             # Lấy lịch sử hội thoại
             conversation_history = SessionManager.get_formatted_history(user_id)
             
-            # Gọi Gemini để trả lời tin nhắn thông thường với lịch sử hội thoại
+            # Gọi Gemini để trả lời
             response = get_model_response_with_history(client, SYSTEM_MESSAGE, conversation_history, user_message)
             
             # Lưu tin nhắn vào lịch sử
@@ -505,26 +505,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             suggestion_button = KeyboardButton("Gợi ý món ăn")
             reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
             
+            # Xử lý markdown trước khi gửi
+            response = remove_markdown(response)
+            
             await update.message.reply_text(response, reply_markup=reply_markup)
             return
-            
     except Exception as e:
         logger.error(f"Lỗi khi xử lý tin nhắn: {e}")
-        
-        # Sử dụng FallbackHandler để định dạng thông báo lỗi
-        error_message = FallbackHandler.format_error_message(e)
-        
-        # Lưu tin nhắn vào lịch sử
-        SessionManager.add_bot_message(user_id, error_message)
-        
-        # Đặt lại trạng thái về IDLE
-        SessionManager.reset_state(user_id)
-        
-        # Tạo nút gợi ý món ăn
-        suggestion_button = KeyboardButton("Gợi ý món ăn")
-        reply_markup = ReplyKeyboardMarkup([[suggestion_button]], resize_keyboard=True)
-        
-        await update.message.reply_text(error_message, reply_markup=reply_markup)
+        await handle_error(update, context, e)
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xử lý khi người dùng chia sẻ vị trí."""
