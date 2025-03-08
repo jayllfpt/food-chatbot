@@ -1,1 +1,13 @@
 Always response in Vietnamese.
+Use Gemini API for natural language processing.
+Follow the conversation flow: detect food intent -> collect criteria -> confirm criteria -> get location -> suggest restaurants.
+Use OpenStreetMap API for finding nearby restaurants.
+Store conversation history in SQLite database.
+Handle errors gracefully with appropriate fallback responses.
+Maintain user session state throughout the conversation.
+Provide typing indicators for better user experience.
+Use custom keyboards for improved interaction.
+Rank restaurants based on relevance to user criteria.
+Suggest additional criteria based on user preferences.
+Generate food suggestions when no restaurants are found.
+Support commands: /start, /help, and /reset.

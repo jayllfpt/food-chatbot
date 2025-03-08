@@ -4,7 +4,7 @@ from llm.main import generate_food_suggestions, get_model_response, client
 from prompts.recommendation import SUGGEST_FOODS_SYSTEM, SUGGEST_FOODS_USER
 
 # Cấu hình logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class FallbackHandler:

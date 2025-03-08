@@ -11,7 +11,7 @@ from prompts.criteria import (
 )
 
 # Cấu hình logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Danh sách các tiêu chí phổ biến
@@ -146,12 +146,13 @@ class CriteriaProcessor:
             return CriteriaProcessor.suggest_additional_criteria(current_criteria, max_suggestions)
     
     @staticmethod
-    def format_criteria_for_confirmation(criteria: List[str]) -> str:
+    def format_criteria_for_confirmation(criteria: List[str], suggested_criteria: List[str] = None) -> str:
         """
         Định dạng danh sách tiêu chí để xác nhận
         
         Args:
-            criteria: Danh sách tiêu chí
+            criteria: Danh sách tiêu chí đã chọn
+            suggested_criteria: Danh sách tiêu chí gợi ý (không bắt buộc)
             
         Returns:
             Chuỗi văn bản đã định dạng
@@ -167,6 +168,11 @@ class CriteriaProcessor:
             # Gọi Gemini để định dạng
             response = get_model_response(client, CONFIRM_CRITERIA_SYSTEM, user_message)
             
+            # Thêm tiêu chí gợi ý nếu có
+            if suggested_criteria and len(suggested_criteria) > 0:
+                response += f"\n\nTôi cũng gợi ý thêm các tiêu chí: {', '.join(suggested_criteria)}"
+                response += "\nBạn có thể nhập thêm các tiêu chí này nếu muốn."
+            
             # Thêm hướng dẫn rõ ràng về hai lựa chọn
             response += "\n\n**Bạn có thể:**\n1. Nhấn nút 'Xác nhận' hoặc gõ 'xác nhận' để tiếp tục\n2. Hoặc nhập thêm tiêu chí nếu bạn muốn"
             
@@ -176,8 +182,12 @@ class CriteriaProcessor:
             logger.error(f"Lỗi khi định dạng tiêu chí: {e}")
             # Fallback: sử dụng phương pháp đơn giản
             criteria_text = ", ".join(criteria)
+            suggested_text = ""
+            if suggested_criteria and len(suggested_criteria) > 0:
+                suggested_text = f"\n\nTôi cũng gợi ý thêm các tiêu chí: {', '.join(suggested_criteria)}"
+            
             return (
-                f"Tiêu chí bạn đã chọn: {criteria_text}\n\n"
+                f"Tiêu chí bạn đã chọn: {criteria_text}{suggested_text}\n\n"
                 "**Bạn có thể:**\n"
                 "1. Nhấn nút 'Xác nhận' hoặc gõ 'xác nhận' để tiếp tục\n"
                 "2. Hoặc nhập thêm tiêu chí nếu bạn muốn"

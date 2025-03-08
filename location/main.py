@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from geopy.distance import geodesic
 
 # Cấu hình logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Cấu hình API
@@ -228,4 +228,28 @@ class LocationService:
         Returns:
             Danh sách top quán ăn
         """
-        return restaurants[:limit] if restaurants else [] 
+        return restaurants[:limit] if restaurants else []
+    
+    @staticmethod
+    def format_restaurant_results(restaurants: List[Dict[str, Any]], criteria: List[str]) -> str:
+        """
+        Định dạng kết quả gợi ý quán ăn
+        
+        Args:
+            restaurants: Danh sách quán ăn
+            criteria: Danh sách tiêu chí
+            
+        Returns:
+            Chuỗi văn bản đã định dạng
+        """
+        if not restaurants:
+            return "Không tìm thấy quán ăn nào phù hợp với tiêu chí của bạn."
+            
+        result = f"Dựa trên tiêu chí của bạn ({', '.join(criteria)}), đây là top {len(restaurants)} quán ăn gần bạn:\n\n"
+        
+        for i, restaurant in enumerate(restaurants, 1):
+            result += f"#{i}: {LocationService.format_restaurant_info(restaurant)}\n\n"
+        
+        result += "Bạn có thể hỏi tôi về việc gợi ý món ăn bất cứ lúc nào."
+        
+        return result 
